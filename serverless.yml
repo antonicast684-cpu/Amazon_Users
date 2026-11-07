@@ -1,0 +1,175 @@
+service: taller-users
+
+plugins:
+  - serverless-localstack
+
+custom:
+  localstack:
+    stages: [local]
+    host: http://localhost
+    edgePort: 4566
+    autoStart: false
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  stage: ${opt:stage, 'develop'}
+  region: us-east-1
+  environment:
+    STAGE: ${self:provider.stage}
+    JWT_SECRET: ${ssm:/taller/${self:provider.stage}/jwt-secret, 'local-secret'}
+    JWT_REFRESH_SECRET: ${ssm:/taller/${self:provider.stage}/jwt-refresh-secret, 'local-dev-refresh-secret'}
+    CORS_ORIGIN: ${file(./config/config-${self:provider.stage}.json):CORS_ORIGINS}
+    USERS_TABLE: !Ref UsersTable
+    REFRESH_TOKENS_TABLE: !Ref RefreshTokensTable
+  apiGateway:
+    restApiId: 
+      Fn::ImportValue: "${self:provider.stage}-MainRestApiId"
+    restApiRootResourceId: 
+      Fn::ImportValue: "${self:provider.stage}-MainRestApiRootResourceId"
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:PutLogEvents
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - dynamodb:PutItem
+        - dynamodb:Query
+        - dynamodb:GetItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: "*"
+
+functions:
+  register:
+    name: taller-${self:provider.stage}-Users-register
+    handler: src/handlers/register.register
+    events:
+      - http:
+          path: /users/register
+          method: post
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+
+  login:
+    name: taller-${self:provider.stage}-Users-login
+    handler: src/handlers/login.login
+    events:
+      - http:
+          path: /users/login
+          method: post
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+
+  getUser:
+    name: taller-${self:provider.stage}-Users-getUser
+    handler: src/handlers/getUser.getUser
+    events:
+      - http:
+          method: get
+          path: /users/{id}
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+          authorizer:
+            type: CUSTOM
+            authorizerId:
+              Fn::ImportValue: "${self:provider.stage}-MainAuthorizerId"
+
+  updateUser:
+    name: taller-${self:provider.stage}-Users-updateUser
+    handler: src/handlers/updateUser.updateUser
+    events:
+      - http:
+          method: put
+          path: /users/{id}
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+          authorizer:
+            type: CUSTOM
+            authorizerId:
+              Fn::ImportValue: "${self:provider.stage}-MainAuthorizerId"
+
+  deleteUser:
+    name: taller-${self:provider.stage}-Users-deleteUser
+    handler: src/handlers/deleteUser.deleteUser
+    events:
+      - http:
+          method: delete
+          path: /users/{id}
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+          authorizer:
+            type: CUSTOM
+            authorizerId:
+              Fn::ImportValue: "${self:provider.stage}-MainAuthorizerId"
+
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-Users-Table
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userid
+            AttributeType: S
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userid
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: EmailIndex
+            KeySchema:
+              - AttributeName: email
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+    RefreshTokensTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-refresh-tokens
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: token
+            AttributeType: S
+        KeySchema:
+          - AttributeName: token
+            KeyType: HASH
+        TimeToLiveSpecification:
+          AttributeName: expiresAt
+          Enabled: true
